@@ -13,6 +13,7 @@ import VTextField from '../VTextField/VTextField'
 
 // Mixins
 import Comparable from '../../mixins/comparable'
+import Dependent from '../../mixins/dependent'
 import Filterable from '../../mixins/filterable'
 
 // Directives
@@ -26,6 +27,7 @@ import { consoleError } from '../../util/console'
 // Types
 import mixins from '../../util/mixins'
 import { VNode, VNodeDirective, PropType, VNodeData } from 'vue'
+import { PropValidator } from 'vue/types/options'
 import { SelectItemKey } from 'vuetify/types'
 
 export const defaultMenuProps = {
@@ -40,12 +42,14 @@ export const defaultMenuProps = {
 const baseMixins = mixins(
   VTextField,
   Comparable,
+  Dependent,
   Filterable
 )
 
 interface options extends InstanceType<typeof baseMixins> {
   $refs: {
     menu: InstanceType<typeof VMenu>
+    content: HTMLElement
     label: HTMLElement
     input: HTMLInputElement
     'prepend-inner': HTMLElement
@@ -82,7 +86,7 @@ export default baseMixins.extend<options>().extend({
     items: {
       type: Array,
       default: () => [],
-    },
+    } as PropValidator<any[]>,
     itemColor: {
       type: String,
       default: 'primary',
@@ -151,9 +155,15 @@ export default baseMixins.extend<options>().extend({
       return `list-${this._uid}`
     },
     computedCounterValue (): number {
-      return this.multiple
-        ? this.selectedItems.length
-        : (this.getText(this.selectedItems[0]) || '').toString().length
+      const value = this.multiple
+        ? this.selectedItems
+        : (this.getText(this.selectedItems[0]) || '').toString()
+
+      if (typeof this.counterValue === 'function') {
+        return this.counterValue(value)
+      }
+
+      return value.length
     },
     directives (): VNodeDirective[] | undefined {
       return this.isFocused ? [{
@@ -161,6 +171,7 @@ export default baseMixins.extend<options>().extend({
         value: {
           handler: this.blur,
           closeConditional: this.closeConditional,
+          include: () => this.getOpenDependentElements(),
         },
       }] : undefined
     },
@@ -274,6 +285,7 @@ export default baseMixins.extend<options>().extend({
       this.isMenuActive = false
       this.isFocused = false
       this.selectedIndex = -1
+      this.setMenuIndex(-1)
     },
     /** @public */
     activateMenu () {
@@ -285,7 +297,7 @@ export default baseMixins.extend<options>().extend({
       this.isMenuActive = true
     },
     clearableCallback () {
-      this.setValue(this.multiple ? [] : undefined)
+      this.setValue(this.multiple ? [] : null)
       this.setMenuIndex(-1)
       this.$nextTick(() => this.$refs.input && this.$refs.input.focus())
 
@@ -312,6 +324,13 @@ export default baseMixins.extend<options>().extend({
       const uniqueValues = new Map()
       for (let index = 0; index < arr.length; ++index) {
         const item = arr[index]
+
+        // Do not deduplicate headers or dividers (#12517)
+        if (item.header || item.divider) {
+          uniqueValues.set(item, item)
+          continue
+        }
+
         const val = this.getValue(item)
 
         // TODO: comparator
@@ -329,22 +348,23 @@ export default baseMixins.extend<options>().extend({
     },
     genChipSelection (item: object, index: number) {
       const isDisabled = (
-        !this.isInteractive ||
+        this.isDisabled ||
         this.getDisabled(item)
       )
+      const isInteractive = !isDisabled && this.isInteractive
 
       return this.$createElement(VChip, {
         staticClass: 'v-chip--select',
         attrs: { tabindex: -1 },
         props: {
-          close: this.deletableChips && !isDisabled,
+          close: this.deletableChips && isInteractive,
           disabled: isDisabled,
           inputValue: index === this.selectedIndex,
           small: this.smallChips,
         },
         on: {
           click: (e: MouseEvent) => {
-            if (isDisabled) return
+            if (!isInteractive) return
 
             e.stopPropagation()
 
@@ -358,7 +378,7 @@ export default baseMixins.extend<options>().extend({
     genCommaSelection (item: object, index: number, last: boolean) {
       const color = index === this.selectedIndex && this.computedColor
       const isDisabled = (
-        !this.isInteractive ||
+        this.isDisabled ||
         this.getDisabled(item)
       )
 
@@ -435,6 +455,7 @@ export default baseMixins.extend<options>().extend({
           'aria-readonly': String(this.isReadonly),
           'aria-activedescendant': getObjectValueByPath(this.$refs.menu, 'activeTile.id'),
           autocomplete: getObjectValueByPath(input.data!, 'attrs.autocomplete', 'off'),
+          placeholder: (!this.isDirty && (this.persistentPlaceholder || this.isFocused || !this.hasLabel)) ? this.placeholder : undefined,
         },
         on: { keypress: this.onKeyPress },
       })
@@ -637,12 +658,6 @@ export default baseMixins.extend<options>().extend({
       const keyCode = e.keyCode
       const menu = this.$refs.menu
 
-      // If enter, space, open menu
-      if ([
-        keyCodes.enter,
-        keyCodes.space,
-      ].includes(keyCode)) this.activateMenu()
-
       this.$emit('keydown', e)
 
       if (!menu) return
@@ -656,13 +671,19 @@ export default baseMixins.extend<options>().extend({
         })
       }
 
-      // If menu is not active, up and down can do
+      // If enter, space, open menu
+      if ([
+        keyCodes.enter,
+        keyCodes.space,
+      ].includes(keyCode)) this.activateMenu()
+
+      // If menu is not active, up/down/home/end can do
       // one of 2 things. If multiple, opens the
       // menu, if not, will cycle through all
       // available options
       if (
         !this.isMenuActive &&
-        [keyCodes.up, keyCodes.down].includes(keyCode)
+        [keyCodes.up, keyCodes.down, keyCodes.home, keyCodes.end].includes(keyCode)
       ) return this.onUpDown(e)
 
       // If escape deactivate the menu
@@ -688,6 +709,7 @@ export default baseMixins.extend<options>().extend({
       if (!menu || !this.isDirty) return
 
       // When menu opens, set index of first active item
+      this.$refs.menu.getTiles()
       for (let i = 0; i < menu.tiles.length; i++) {
         if (menu.tiles[i].getAttribute('aria-selected') === 'true') {
           this.setMenuIndex(i)
@@ -696,6 +718,7 @@ export default baseMixins.extend<options>().extend({
       }
     },
     onMouseUp (e: MouseEvent) {
+      // eslint-disable-next-line sonarjs/no-collapsible-if
       if (
         this.hasMouseDown &&
         e.which !== 3 &&
@@ -706,10 +729,6 @@ export default baseMixins.extend<options>().extend({
         // or inside, toggle menu
         if (this.isAppendInner(e.target)) {
           this.$nextTick(() => (this.isMenuActive = !this.isMenuActive))
-        // If user is clicking in the container
-        // and field is enclosed, activate it
-        } else if (this.isEnclosed) {
-          this.isMenuActive = true
         }
       }
 
@@ -780,8 +799,24 @@ export default baseMixins.extend<options>().extend({
 
       window.requestAnimationFrame(() => {
         menu.getTiles()
-        keyCodes.up === keyCode ? menu.prevTile() : menu.nextTile()
-        menu.activeTile && menu.activeTile.click()
+
+        if (!menu.hasClickableTiles) return this.activateMenu()
+
+        switch (keyCode) {
+          case keyCodes.up:
+            menu.prevTile()
+            break
+          case keyCodes.down:
+            menu.nextTile()
+            break
+          case keyCodes.home:
+            menu.firstTile()
+            break
+          case keyCodes.end:
+            menu.lastTile()
+            break
+        }
+        this.selectItem(this.allItems[this.getMenuIndex()])
       })
     },
     selectItem (item: object) {
@@ -805,20 +840,17 @@ export default baseMixins.extend<options>().extend({
             (this.$refs.menu as { [key: string]: any }).updateDimensions()
         })
 
-        // We only need to reset list index for multiple
-        // to keep highlight when an item is toggled
-        // on and off
-        if (!this.multiple) return
-
-        const listIndex = this.getMenuIndex()
-
-        this.setMenuIndex(-1)
-
         // There is no item to re-highlight
         // when selections are hidden
-        if (this.hideSelected) return
-
-        this.$nextTick(() => this.setMenuIndex(listIndex))
+        if (this.hideSelected) {
+          this.setMenuIndex(-1)
+        } else {
+          const index = this.allItems.indexOf(item)
+          if (~index) {
+            this.$nextTick(() => this.$refs.menu.getTiles())
+            setTimeout(() => this.setMenuIndex(index))
+          }
+        }
       }
     },
     setMenuIndex (index: number) {
@@ -844,9 +876,10 @@ export default baseMixins.extend<options>().extend({
       this.selectedItems = selectedItems
     },
     setValue (value: any) {
-      const oldValue = this.internalValue
-      this.internalValue = value
-      value !== oldValue && this.$emit('change', value)
+      if (!this.valueComparator(value, this.internalValue)) {
+        this.internalValue = value
+        this.$emit('change', value)
+      }
     },
     isAppendInner (target: any) {
       // return true if append inner is present
