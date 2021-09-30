@@ -29,7 +29,11 @@ declare global {
   }
 
   interface HTMLElement {
-    _clickOutside?: EventListenerOrEventListenerObject
+    _clickOutside?: {
+      lastMousedownWasOutside: boolean
+      onClick: EventListener
+      onMousedown: EventListener
+    }
     _onResize?: {
       callback: () => void
       options?: boolean | AddEventListenerOptions
@@ -59,10 +63,21 @@ declare global {
     _touchHandlers?: {
       [_uid: number]: TouchStoredHandlers
     }
+    _transitionInitialStyles?: {
+      position: string
+      top: string
+      left: string
+      width: string
+      height: string
+    }
   }
 
   interface WheelEvent {
     path?: EventTarget[]
+  }
+
+  interface UIEvent {
+    initUIEvent (typeArg: string, canBubbleArg: boolean, cancelableArg: boolean, viewArg: Window, detailArg: number): void
   }
 
   function parseInt(s: string | number, radix?: number): number
@@ -97,8 +112,8 @@ declare module 'vue/types/vue' {
   >
 
   export interface Vue {
-    _uid: number
-    _isDestroyed: boolean
+    readonly _uid: number
+    readonly _isDestroyed: boolean
 
     /** bindObjectProps */
     _b (

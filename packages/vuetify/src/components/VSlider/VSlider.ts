@@ -18,6 +18,7 @@ import { consoleWarn } from '../../util/console'
 // Types
 import Vue, { VNode, VNodeChildrenArrayContents, PropType } from 'vue'
 import { ScopedSlotChildren } from 'vue/types/vnode'
+import { PropValidator } from 'vue/types/options'
 
 interface options extends Vue {
   $refs: {
@@ -71,9 +72,9 @@ export default mixins<options &
       default: 32,
     },
     tickLabels: {
-      type: Array as PropType<string[]>,
+      type: Array,
       default: () => ([]),
-    },
+    } as PropValidator<string[]>,
     ticks: {
       type: [Boolean, String] as PropType<boolean | 'always'>,
       default: false,
@@ -92,10 +93,12 @@ export default mixins<options &
   data: () => ({
     app: null as any,
     oldValue: null as any,
-    keyPressed: 0,
+    thumbPressed: false,
+    mouseTimeout: -1,
     isFocused: false,
     isActive: false,
     noClick: false, // Prevent click event if dragging took place, hack for #7915
+    startOffset: 0,
   }),
 
   computed: {
@@ -126,7 +129,11 @@ export default mixins<options &
       },
     },
     trackTransition (): string {
-      return this.keyPressed >= 2 ? 'none' : ''
+      return this.thumbPressed
+        ? this.showTicks || this.stepNumeric
+          ? '0.1s cubic-bezier(0.25, 0.8, 0.5, 1)'
+          : 'none'
+        : ''
     },
     minValue (): number {
       return parseFloat(this.min)
@@ -138,9 +145,9 @@ export default mixins<options &
       return this.step > 0 ? parseFloat(this.step) : 0
     },
     inputWidth (): number {
-      const value = (this.roundValue(this.internalValue) - this.minValue) / (this.maxValue - this.minValue) * 100
+      const inputWidth = (this.roundValue(this.internalValue) - this.minValue) / (this.maxValue - this.minValue) * 100
 
-      return value
+      return isNaN(inputWidth) ? 0 : inputWidth
     },
     trackFillStyles (): Partial<CSSStyleDeclaration> {
       const startDir = this.vertical ? 'bottom' : 'left'
@@ -260,6 +267,8 @@ export default mixins<options &
         }],
         on: {
           click: this.onSliderClick,
+          mousedown: this.onSliderMouseDown,
+          touchstart: this.onSliderMouseDown,
         },
       }, this.genChildren())
     },
@@ -273,7 +282,6 @@ export default mixins<options &
           this.inputWidth,
           this.isActive,
           this.isFocused,
-          this.onThumbMouseDown,
           this.onFocus,
           this.onBlur,
         ),
@@ -284,7 +292,7 @@ export default mixins<options &
         attrs: {
           value: this.internalValue,
           id: this.computedId,
-          disabled: this.isDisabled,
+          disabled: true,
           readonly: true,
           tabindex: -1,
           ...this.$attrs,
@@ -358,7 +366,6 @@ export default mixins<options &
       valueWidth: number,
       isActive: boolean,
       isFocused: boolean,
-      onDrag: Function,
       onFocus: Function,
       onBlur: Function,
       ref = 'thumb'
@@ -381,21 +388,17 @@ export default mixins<options &
         attrs: {
           role: 'slider',
           tabindex: this.isDisabled ? -1 : this.$attrs.tabindex ? this.$attrs.tabindex : 0,
-          'aria-label': this.label,
+          'aria-label': this.$attrs['aria-label'] || this.label,
           'aria-valuemin': this.min,
           'aria-valuemax': this.max,
           'aria-valuenow': this.internalValue,
           'aria-readonly': String(this.isReadonly),
           'aria-orientation': this.vertical ? 'vertical' : 'horizontal',
-          ...this.$attrs,
         },
         on: {
           focus: onFocus,
           blur: onBlur,
           keydown: this.onKeyDown,
-          keyup: this.onKeyUp,
-          touchstart: onDrag,
-          mousedown: onDrag,
         },
       }), children)
     },
@@ -447,28 +450,42 @@ export default mixins<options &
         [direction]: `${value}%`,
       }
     },
-    onThumbMouseDown (e: MouseEvent) {
+    onSliderMouseDown (e: MouseEvent | TouchEvent) {
       e.preventDefault()
 
       this.oldValue = this.internalValue
-      this.keyPressed = 2
       this.isActive = true
+
+      if ((e.target as Element)?.matches('.v-slider__thumb-container, .v-slider__thumb-container *')) {
+        this.thumbPressed = true
+        const domRect = (e.target as Element).getBoundingClientRect()
+        const touch = 'touches' in e ? e.touches[0] : e
+        this.startOffset = this.vertical
+          ? touch.clientY - (domRect.top + domRect.height / 2)
+          : touch.clientX - (domRect.left + domRect.width / 2)
+      } else {
+        this.startOffset = 0
+        window.clearTimeout(this.mouseTimeout)
+        this.mouseTimeout = window.setTimeout(() => {
+          this.thumbPressed = true
+        }, 300)
+      }
 
       const mouseUpOptions = passiveSupported ? { passive: true, capture: true } : true
       const mouseMoveOptions = passiveSupported ? { passive: true } : false
-      if ('touches' in e) {
-        this.app.addEventListener('touchmove', this.onMouseMove, mouseMoveOptions)
-        addOnceEventListener(this.app, 'touchend', this.onSliderMouseUp, mouseUpOptions)
-      } else {
-        this.app.addEventListener('mousemove', this.onMouseMove, mouseMoveOptions)
-        addOnceEventListener(this.app, 'mouseup', this.onSliderMouseUp, mouseUpOptions)
-      }
+
+      const isTouchEvent = 'touches' in e
+
+      this.onMouseMove(e)
+      this.app.addEventListener(isTouchEvent ? 'touchmove' : 'mousemove', this.onMouseMove, mouseMoveOptions)
+      addOnceEventListener(this.app, isTouchEvent ? 'touchend' : 'mouseup', this.onSliderMouseUp, mouseUpOptions)
 
       this.$emit('start', this.internalValue)
     },
     onSliderMouseUp (e: Event) {
       e.stopPropagation()
-      this.keyPressed = 0
+      window.clearTimeout(this.mouseTimeout)
+      this.thumbPressed = false
       const mouseMoveOptions = passiveSupported ? { passive: true } : false
       this.app.removeEventListener('touchmove', this.onMouseMove, mouseMoveOptions)
       this.app.removeEventListener('mousemove', this.onMouseMove, mouseMoveOptions)
@@ -482,9 +499,11 @@ export default mixins<options &
 
       this.isActive = false
     },
-    onMouseMove (e: MouseEvent) {
-      const { value } = this.parseMouseMove(e)
-      this.internalValue = value
+    onMouseMove (e: MouseEvent | TouchEvent) {
+      if (e.type === 'mousemove') {
+        this.thumbPressed = true
+      }
+      this.internalValue = this.parseMouseMove(e)
     },
     onKeyDown (e: KeyboardEvent) {
       if (!this.isInteractive) return
@@ -499,9 +518,6 @@ export default mixins<options &
 
       this.internalValue = value
       this.$emit('change', value)
-    },
-    onKeyUp () {
-      this.keyPressed = 0
     },
     onSliderClick (e: MouseEvent) {
       if (this.noClick) {
@@ -524,7 +540,7 @@ export default mixins<options &
 
       this.$emit('focus', e)
     },
-    parseMouseMove (e: MouseEvent) {
+    parseMouseMove (e: MouseEvent | TouchEvent) {
       const start = this.vertical ? 'top' : 'left'
       const length = this.vertical ? 'height' : 'width'
       const click = this.vertical ? 'clientY' : 'clientX'
@@ -532,19 +548,16 @@ export default mixins<options &
       const {
         [start]: trackStart,
         [length]: trackLength,
-      } = this.$refs.track.getBoundingClientRect() as any
-      const clickOffset = 'touches' in e ? (e as any).touches[0][click] : e[click] // Can we get rid of any here?
+      } = this.$refs.track.getBoundingClientRect()
+      const clickOffset = 'touches' in e ? e.touches[0][click] : e[click]
 
       // It is possible for left to be NaN, force to number
-      let clickPos = Math.min(Math.max((clickOffset - trackStart) / trackLength, 0), 1) || 0
+      let clickPos = Math.min(Math.max((clickOffset - trackStart - this.startOffset) / trackLength, 0), 1) || 0
 
       if (this.vertical) clickPos = 1 - clickPos
       if (this.$vuetify.rtl) clickPos = 1 - clickPos
 
-      const isInsideTrack = clickOffset >= trackStart && clickOffset <= trackStart + trackLength
-      const value = parseFloat(this.min) + clickPos * (this.maxValue - this.minValue)
-
-      return { value, isInsideTrack }
+      return parseFloat(this.min) + clickPos * (this.maxValue - this.minValue)
     },
     parseKeyDown (e: KeyboardEvent, value: number) {
       if (!this.isInteractive) return
@@ -557,8 +570,6 @@ export default mixins<options &
       const step = this.stepNumeric || 1
       const steps = (this.maxValue - this.minValue) / step
       if ([left, right, down, up].includes(e.keyCode)) {
-        this.keyPressed += 1
-
         const increase = this.$vuetify.rtl ? [left, up] : [right, up]
         const direction = increase.includes(e.keyCode) ? 1 : -1
         const multiplier = e.shiftKey ? 3 : (e.ctrlKey ? 2 : 1)

@@ -6,7 +6,7 @@ import Themeable from '../../mixins/themeable'
 
 // Types
 import mixins, { ExtractVue } from '../../util/mixins'
-import Vue, { VNode, PropType } from 'vue'
+import Vue, { VNode, PropType, VNodeData } from 'vue'
 import { PropValidator } from 'vue/types/options'
 
 interface Point {
@@ -189,7 +189,7 @@ export default mixins<options &
     },
     onDragMove (e: MouseEvent | TouchEvent) {
       e.preventDefault()
-      if (!this.isDragging && e.type !== 'click') return
+      if ((!this.isDragging && e.type !== 'click') || !this.$refs.clock) return
 
       const { width, top, left } = this.$refs.clock.getBoundingClientRect()
       const { width: innerWidth } = this.$refs.innerClock.getBoundingClientRect()
@@ -247,13 +247,13 @@ export default mixins<options &
   },
 
   render (h): VNode {
-    const data = {
+    const data: VNodeData = {
       staticClass: 'v-time-picker-clock',
       class: {
         'v-time-picker-clock--indeterminate': this.value == null,
         ...this.themeClasses,
       },
-      on: (this.readonly || this.disabled) ? undefined : Object.assign({
+      on: (this.readonly || this.disabled) ? undefined : {
         mousedown: this.onMouseDown,
         mouseup: this.onMouseUp,
         mouseleave: (e: MouseEvent) => (this.isDragging && this.onMouseUp(e)),
@@ -261,10 +261,12 @@ export default mixins<options &
         touchend: this.onMouseUp,
         mousemove: this.onDragMove,
         touchmove: this.onDragMove,
-      }, this.scrollable ? {
-        wheel: this.wheel,
-      } : {}),
+      },
       ref: 'clock',
+    }
+
+    if (this.scrollable && data.on) {
+      data.on.wheel = this.wheel
     }
 
     return h('div', data, [
