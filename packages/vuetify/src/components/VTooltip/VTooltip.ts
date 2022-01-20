@@ -26,15 +26,15 @@ export default mixins(Colorable, Delayable, Dependent, Menuable, Toggleable).ext
       default: 0,
     },
     disabled: Boolean,
-    fixed: {
-      type: Boolean,
-      default: true,
-    },
     openDelay: {
       type: [Number, String],
       default: 0,
     },
     openOnHover: {
+      type: Boolean,
+      default: true,
+    },
+    openOnFocus: {
       type: Boolean,
       default: true,
     },
@@ -97,8 +97,9 @@ export default mixins(Colorable, Delayable, Dependent, Menuable, Toggleable).ext
 
       if (this.nudgeTop) top -= parseInt(this.nudgeTop)
       if (this.nudgeBottom) top += parseInt(this.nudgeBottom)
+      if (this.attach === false) top += this.pageYOffset
 
-      return `${this.calcYOverflow(top + this.pageYOffset)}px`
+      return `${this.calcYOverflow(top)}px`
     },
     classes (): object {
       return {
@@ -128,7 +129,6 @@ export default mixins(Colorable, Delayable, Dependent, Menuable, Toggleable).ext
         left: this.calculatedLeft,
         maxWidth: convertToUnit(this.maxWidth),
         minWidth: convertToUnit(this.minWidth),
-        opacity: this.isActive ? 0.9 : 0,
         top: this.calculatedTop,
         zIndex: this.zIndex || this.activeZIndex,
       }
@@ -161,14 +161,17 @@ export default mixins(Colorable, Delayable, Dependent, Menuable, Toggleable).ext
     genActivatorListeners () {
       const listeners = Activatable.options.methods.genActivatorListeners.call(this)
 
-      listeners.focus = (e: Event) => {
-        this.getActivator(e)
-        this.runDelay('open')
+      if (this.openOnFocus) {
+        listeners.focus = (e: Event) => {
+          this.getActivator(e)
+          this.runDelay('open')
+        }
+        listeners.blur = (e: Event) => {
+          this.getActivator(e)
+          this.runDelay('close')
+        }
       }
-      listeners.blur = (e: Event) => {
-        this.getActivator(e)
-        this.runDelay('close')
-      }
+
       listeners.keydown = (e: KeyboardEvent) => {
         if (e.keyCode === keyCodes.esc) {
           this.getActivator(e)
